@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p models views controllers data)",
+      "Bash(touch models/__init__.py views/__init__.py controllers/__init__.py)",
+      "Bash(python -c \"import models; import controller; import views; print\\('imports OK'\\)\")"
+    ]
+  }
+}
