@@ -1,11 +1,14 @@
-import datetime
 from tkinter import messagebox
+
+from locales import (
+    DEFAULT_LANG, DEFAULT_THEME, LOCALES, MEDIA_BOOK, STATUS_PLANNED,
+    STATUS_WATCHED, THEME, THEMES,
+)
 from models import CollectionModel, MediaItem
-from locales import LOCALES, DEFAULT_LANG, DEFAULT_THEME, THEME, THEMES
 
 
-class MainController:
-    def __init__(self, model: CollectionModel):
+class MainController: # ХЗ шо за клас
+    def __init__(self, model: CollectionModel): # Оголошення укр мови + чорного фону
         self.model = model
         self.view = None
         self.current_lang = DEFAULT_LANG
@@ -13,13 +16,13 @@ class MainController:
         self._search_query = ""
         self._active_filters: dict = {}
 
-    def set_view(self, view) -> None:
+    def set_view(self, view: "MainView") -> None:  # noqa: F821
         self.view = view
         self.view.filter_view.on_filter_change = self.on_filter_changed
 
     # ── Translation ───────────────────────────────────────────────────────────
 
-    def t(self, key: str) -> str:
+    def t(self, key: str) -> str: # Робить з hello - привіт перекладає короч
         return LOCALES[self.current_lang].get(key, key)
 
     def set_language(self, lang: str) -> None:
@@ -51,20 +54,20 @@ class MainController:
         self._refresh_stats()
 
     def _apply_filters(self) -> list[MediaItem]:
-        items = self.model.get_all()
+        items = self.model.get_all() # ОТримуємо всі дані з Json
         if self._search_query:
             items = self.model.search(self._search_query, items)
-        f = self._active_filters
+        filters = self._active_filters
         items = self.model.filter_items(
             items,
-            media_type=f.get("media_type"),
-            status=f.get("status"),
-            genre=f.get("genre"),
+            media_type=filters.get("media_type"),
+            status=filters.get("status"),
+            genre=filters.get("genre"),
         )
         items = self.model.sort_items(
             items,
-            key=f.get("sort_key", "title"),
-            reverse=f.get("sort_reverse", False),
+            key=filters.get("sort_key", "title"),
+            reverse=filters.get("sort_reverse", False),
         )
         return items
 
@@ -74,15 +77,15 @@ class MainController:
 
     def _refresh_stats(self) -> None:
         stats = self.model.get_statistics()
-        self.view.stats_view.update_stats(stats)
+        self.view.update_stats(stats)
         self._refresh_analytics()
 
     def _refresh_analytics(self) -> None:
-        year, month = self.view.analytics_view.get_period_selection()
+        year, month = self.view.get_period_selection()
         data = self.model.get_analytics(year=year, month=month)
-        self.view.analytics_view.update_analytics({
+        self.view.update_analytics({
             "completed_count": data["completed_count"],
-            "top5_rated": [it.to_dict() for it in data["top5_rated"]],
+            "top_rated": [it.to_dict() for it in data["top_rated"]],
         })
 
     # ── Event handlers ────────────────────────────────────────────────────────
@@ -108,8 +111,8 @@ class MainController:
         if result is None:
             return
         result["id"] = item_id
-        updated = self._dict_to_mediaitem(result, original_item=item)
-        self.model.update_item(updated)
+        updated = self._dict_to_mediaitem(result)
+        self.model.update_item(updated, original=item)
         self._refresh_treeview()
         self._refresh_stats()
 
@@ -153,7 +156,7 @@ class MainController:
         try:
             self.model.export_csv(filepath, items)
             messagebox.showinfo("", self.t("msg_export_success"))
-        except Exception as e:
+        except OSError as e:
             messagebox.showerror("Export Error", str(e))
 
     def on_refresh(self) -> None:
@@ -161,6 +164,8 @@ class MainController:
         self._refresh_stats()
 
     def on_selection_changed(self) -> None:
+        # Reserved for future detail-panel or preview updates.
+        # Currently the treeview selection drives no additional UI action.
         pass
 
     def on_analytics_period_changed(self) -> None:
@@ -168,60 +173,54 @@ class MainController:
 
     # ── Validation ────────────────────────────────────────────────────────────
 
-    def validate_item_form(self, data: dict) -> tuple[bool, str | None]:
+    def validate_item_form(self, data: dict) -> tuple[bool, str | None, dict]:
+        """Validate form data without mutating it.
+
+        Returns (ok, error_message, coerced_values). On success, merge
+        coerced_values into the original dict before using it.
+        """
+        coerced: dict = {}
+
         title = data.get("title", "").strip()
         if not title:
-            return False, self.t("err_title_empty")
+            return False, self.t("err_title_empty"), {}
 
         genre = data.get("genre", "").strip()
         if genre and any(c.isdigit() for c in genre):
-            return False, self.t("err_genre_invalid")
+            return False, self.t("err_genre_invalid"), {}
 
         try:
             year_int = int(data.get("year", 0))
             if not (1900 <= year_int <= 2030):
                 raise ValueError
-            data["year"] = year_int
+            coerced["year"] = year_int
         except (ValueError, TypeError):
-            return False, self.t("err_year_invalid")
+            return False, self.t("err_year_invalid"), {}
 
         try:
             rating_raw = data.get("rating", 0)
             r = int(rating_raw)
             if not (0 <= r <= 10):
                 raise ValueError
-            data["rating"] = None if r == 0 else r
+            coerced["rating"] = None if r == 0 else r
         except (ValueError, TypeError):
-            return False, self.t("err_rating_invalid")
+            return False, self.t("err_rating_invalid"), {}
 
-        return True, None
+        return True, None, coerced
 
     # ── Conversion ────────────────────────────────────────────────────────────
 
-    def _dict_to_mediaitem(
-        self,
-        d: dict,
-        original_item: MediaItem | None = None,
-    ) -> MediaItem:
-        completed_date = d.get("completed_date", "")
-        if d.get("status") == "Переглянуто":
-            if original_item is None or original_item.status != "Переглянуто":
-                completed_date = datetime.date.today().isoformat()
-            elif original_item.completed_date:
-                completed_date = original_item.completed_date
-        elif original_item is not None:
-            completed_date = original_item.completed_date
-
+    def _dict_to_mediaitem(self, d: dict) -> MediaItem:
         kwargs = {
-            "title":          d.get("title", "").strip(),
-            "media_type":     d.get("media_type", "book"),
-            "genre":          d.get("genre", "").strip(),
-            "year":           int(d.get("year", 0)),
-            "description":    d.get("description", "").strip(),
-            "rating":         d.get("rating"),
-            "status":         d.get("status", "Заплановано"),
-            "completed_date": completed_date,
-            "added_date":     d.get("added_date", ""),
+            "title": d.get("title", "").strip(),
+            "media_type": d.get("media_type", MEDIA_BOOK),
+            "genre": d.get("genre", "").strip(),
+            "year": int(d.get("year", 0)),
+            "description": d.get("description", "").strip(),
+            "rating": d.get("rating"),
+            "status": d.get("status", STATUS_PLANNED),
+            "completed_date": d.get("completed_date", ""),
+            "added_date": d.get("added_date", ""),
         }
         if d.get("id"):
             kwargs["id"] = d["id"]

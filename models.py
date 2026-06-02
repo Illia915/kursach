@@ -1,25 +1,30 @@
-from dataclasses import dataclass, field
-import uuid
-import json
 import csv
-import os
 import datetime
+import json
+import os
+import uuid
+from dataclasses import dataclass, field
+
+from locales import (
+    MEDIA_BOOK, MEDIA_MANGA, MEDIA_ANIME,
+    STATUS_WATCHED, STATUS_PLANNED,
+)
 
 
 @dataclass
-class MediaItem:
+class MediaItem:  # То клас який формує записи 
     title: str
     media_type: str
     genre: str = ""
     year: int = 0
     description: str = ""
     rating: int | None = None
-    status: str = "Заплановано"
+    status: str = STATUS_PLANNED
     completed_date: str = ""
     added_date: str = ""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict: # Переводить записи в словник 
         return {
             "id": self.id,
             "title": self.title,
@@ -34,7 +39,7 @@ class MediaItem:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "MediaItem":
+    def from_dict(cls, d: dict) -> "MediaItem": # Витягує безпечним способом значення зі словника і приводить їх в правилний тип 
         rating = d.get("rating")
         if rating is not None:
             try:
@@ -49,18 +54,26 @@ class MediaItem:
         return cls(
             id=d.get("id", str(uuid.uuid4())),
             title=d.get("title", ""),
-            media_type=d.get("media_type", "book"),
+            media_type=d.get("media_type", MEDIA_BOOK),
             genre=d.get("genre", ""),
             year=year,
             description=d.get("description", ""),
             rating=rating,
-            status=d.get("status", "Заплановано"),
+            status=d.get("status", STATUS_PLANNED),
             completed_date=d.get("completed_date", ""),
             added_date=d.get("added_date", ""),
         )
 
 
-class CollectionModel:
+def _rating_key(item: "MediaItem", reverse: bool) -> tuple: # Функція для сортування 
+    # None-rated items always sort last regardless of ascending/descending direction.
+    if item.rating is None:
+        return (1, 0)
+    return (0, -item.rating if reverse else item.rating)
+
+
+
+class CollectionModel: # Клас для запису даних в json / crud операції / 
     def __init__(self, filepath: str = "collection.json"):
         self.filepath = filepath
         self._items: list[MediaItem] = []
@@ -79,6 +92,7 @@ class CollectionModel:
                 data = json.load(f)
             self._items = [MediaItem.from_dict(d) for d in data]
         except (json.JSONDecodeError, KeyError, TypeError) as e:
+            # Reset to empty list before re-raising so the app stays in a valid state.
             self._items = []
             raise ValueError(f"Не вдалося завантажити колекцію: {e}") from e
 
@@ -95,12 +109,14 @@ class CollectionModel:
     def add_item(self, item: MediaItem) -> None:
         if not item.added_date:
             item.added_date = datetime.date.today().isoformat()
+        self._apply_completed_date(item)
         self._items.append(item)
         self.save()
 
-    def update_item(self, item: MediaItem) -> None:
+    def update_item(self, item: MediaItem, original: "MediaItem | None" = None) -> None:
         for i, existing in enumerate(self._items):
             if existing.id == item.id:
+                self._apply_completed_date(item, original or existing)
                 self._items[i] = item
                 self.save()
                 return
@@ -158,25 +174,21 @@ class CollectionModel:
         if key == "title":
             return sorted(items, key=lambda it: it.title.lower(), reverse=reverse)
         if key == "rating":
-            return sorted(
-                items,
-                key=lambda it: (it.rating is None, -(it.rating or 0) if reverse else (it.rating or 0)),
-                reverse=False,
-            )
+            return sorted(items, key=lambda it: _rating_key(it, reverse))
         if key == "year":
             return sorted(items, key=lambda it: it.year, reverse=reverse)
         return list(items)
 
     # ── Aggregations ──────────────────────────────────────────────────────────
 
-    def get_statistics(self) -> dict:
+    def get_statistics(self) -> dict: # Агрегації на сторінці Статистики 
         total = len(self._items)
-        by_type = {"book": 0, "manga": 0, "anime": 0}
+        by_type = {MEDIA_BOOK: 0, MEDIA_MANGA: 0, MEDIA_ANIME: 0}
         by_status = {
-            "Переглянуто": 0,
-            "В процесі":   0,
-            "Заплановано": 0,
-            "Покинуто":    0,
+            STATUS_WATCHED: 0,
+            STATUS_PLANNED: 0,
+            "В процесі": 0,
+            "Покинуто": 0,
         }
         rated = [it.rating for it in self._items if it.rating is not None]
         for it in self._items:
@@ -192,22 +204,22 @@ class CollectionModel:
             "by_status": by_status,
         }
 
-    def get_analytics(
+    def get_analytics( # Топ 10 
         self,
         year: int | None = None,
         month: int | None = None,
     ) -> dict:
-        if year is None and month is None:
-            completed_count = sum(
-                1 for it in self._items if it.status == "Переглянуто"
-            )
-            rated = [it for it in self._items if it.rating is not None]
-            top10 = sorted(rated, key=lambda it: it.rating, reverse=True)[:10]
-            return {"completed_count": completed_count, "top5_rated": top10}
+        # if year is None and month is None:
+        #     completed_count = sum(
+        #         1 for it in self._items if it.status == STATUS_WATCHED
+        #     )
+        #     rated = [it for it in self._items if it.rating is not None]
+        #     top_rated = sorted(rated, key=lambda it: it.rating, reverse=True)[:10]
+        #     return {"completed_count": completed_count, "top_rated": top_rated}
 
         completed = [
             it for it in self._items
-            if it.status == "Переглянуто" and it.completed_date
+            if it.status == STATUS_WATCHED and it.completed_date
         ]
         filtered = []
         for it in completed:
@@ -222,10 +234,10 @@ class CollectionModel:
             filtered.append(it)
 
         rated = [it for it in filtered if it.rating is not None]
-        top10 = sorted(rated, key=lambda it: it.rating, reverse=True)[:10]
+        top_rated = sorted(rated, key=lambda it: it.rating, reverse=True)[:10]
         return {
             "completed_count": len(filtered),
-            "top5_rated": top10,
+            "top_rated": top_rated,
         }
 
     # ── Export ────────────────────────────────────────────────────────────────
@@ -245,3 +257,20 @@ class CollectionModel:
                     it.rating if it.rating is not None else "",
                     it.status, it.completed_date, it.added_date,
                 ])
+    
+    
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _apply_completed_date(
+        item: MediaItem,
+        original: "MediaItem | None" = None,
+    ) -> None:
+        # Stamp today as completion date on the first transition to WATCHED status.
+        if item.status != STATUS_WATCHED:
+            return
+        if original is None or original.status != STATUS_WATCHED:
+            item.completed_date = datetime.date.today().isoformat()
+        elif original.completed_date and not item.completed_date:
+            item.completed_date = original.completed_date
