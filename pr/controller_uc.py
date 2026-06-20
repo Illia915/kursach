@@ -119,82 +119,9 @@ class MainController:
             messagebox.showwarning("", self.t("err_no_selection"))
             return
         item = self.model.get_by_id(item_id)
-        if item is None:
-            return
-        confirm = messagebox.askyesno(
-            self.t("btn_delete"),
-            self.t("confirm_delete").format(title=item.title),
-        )
-        if confirm:
-            self.model.delete_item(item_id)
-            self._refresh_treeview()
-            self._refresh_stats()
 
-    def on_search_changed(self, query: str) -> None:
-        self._search_query = query.strip()
-        self._refresh_treeview()
-
-    def on_filter_changed(self) -> None:
-        self._active_filters = self.view.filter_view.get_filter_state()
-        self._refresh_treeview()
-
-    def on_sort(self, column: str) -> None:
-        current_key = self._active_filters.get("sort_key", "title")
-        current_rev = self._active_filters.get("sort_reverse", False)
-        if current_key == column:
-            self._active_filters["sort_reverse"] = not current_rev
-        else:
-            self._active_filters["sort_key"] = column
-            self._active_filters["sort_reverse"] = False
-        self._refresh_treeview()
-
-    def on_export(self, filepath: str) -> None:
-        items = self._apply_filters()
-        try:
-            self.model.export_csv(filepath, items)
-            messagebox.showinfo("", self.t("msg_export_success"))
-        except Exception as e:
-            messagebox.showerror("Export Error", str(e))
-
-    def on_refresh(self) -> None:
-        self._refresh_treeview()
-        self._refresh_stats()
-
-    def on_selection_changed(self) -> None:
+    def please_merge_me():
         pass
-
-    def on_analytics_period_changed(self) -> None:
-        self._refresh_analytics()
-
-    # ── Validation ────────────────────────────────────────────────────────────
-
-    def validate_item_form(self, data: dict) -> tuple[bool, str | None]:
-        title = data.get("title", "").strip()
-        if not title:
-            return False, self.t("err_title_empty")
-
-        genre = data.get("genre", "").strip()
-        if genre and any(c.isdigit() for c in genre):
-            return False, self.t("err_genre_invalid")
-
-        try:
-            year_int = int(data.get("year", 0))
-            if not (1900 <= year_int <= 2030):
-                raise ValueError
-            data["year"] = year_int
-        except (ValueError, TypeError):
-            return False, self.t("err_year_invalid")
-
-        try:
-            rating_raw = data.get("rating", 0)
-            r = int(rating_raw)
-            if not (0 <= r <= 10):
-                raise ValueError
-            data["rating"] = None if r == 0 else r
-        except (ValueError, TypeError):
-            return False, self.t("err_rating_invalid")
-
-        return True, None
 
     # ── Conversion ────────────────────────────────────────────────────────────
 
